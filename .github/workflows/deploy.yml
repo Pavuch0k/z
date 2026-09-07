@@ -2,8 +2,7 @@ name: Deploy Docs to GitHub Pages
 
 on:
   push:
-    branches:
-      - main
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
@@ -12,8 +11,8 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: "pages"
+  cancel-in-progress: true
 
 jobs:
   build-and-deploy:
@@ -26,28 +25,36 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24
-
-      - name: Install dependencies
-        run: npm install marked
+          node-version: "20"
 
       - name: Build documentation
-        shell: bash
         run: |
-          set -e
-
-          rm -rf _site
           mkdir -p _site
 
-          node <<'NODE'
+          npm install marked
+
+          cat > compiler.js <<'EOF'
           const fs = require("fs");
           const path = require("path");
           const { marked } = require("marked");
 
-          const docsDir = path.resolve("docs");
-          const siteDir = path.resolve("_site");
+          const DOCS_DIR = "docs";
+          const SITE_DIR = "_site";
 
-          function getMarkdownFiles(dir) {
+          marked.setOptions({
+            gfm: true,
+            breaks: true
+          });
+
+          // -----------------------------------------
+          // Find all Markdown files
+          // -----------------------------------------
+
+          function findMarkdownFiles(dir) {
+            if (!fs.existsSync(dir)) {
+              return [];
+            }
+
             const result = [];
 
             for (const entry of fs.readdirSync(dir, {
@@ -56,7 +63,7 @@ jobs:
               const fullPath = path.join(dir, entry.name);
 
               if (entry.isDirectory()) {
-                result.push(...getMarkdownFiles(fullPath));
+                result.push(...findMarkdownFiles(fullPath));
               } else if (
                 entry.isFile() &&
                 entry.name.toLowerCase().endsWith(".md")
@@ -68,6 +75,10 @@ jobs:
             return result;
           }
 
+          // -----------------------------------------
+          // Helpers
+          // -----------------------------------------
+
           function getTitle(markdown, filePath) {
             const match = markdown.match(/^#\s+(.+)$/m);
 
@@ -78,19 +89,42 @@ jobs:
             return path.basename(filePath, ".md");
           }
 
-          /*
-           * Исправление Markdown-ссылок:
-           *
-           * [Спецификация](01-specification.md)
-           *                    ↓
-           * [Спецификация](01-specification.html)
-           *
-           * Также:
-           *
-           * [Типы](01-specification.md#types)
-           *       ↓
-           * [Типы](01-specification.html#types)
-           */
+          function getSlug(filePath) {
+            const relative = path.relative(DOCS_DIR, filePath);
+
+            return relative
+              .replace(/\.md$/i, "")
+              .split(path.sep)
+              .map(part =>
+                part
+                  .toLowerCase()
+                  .replace(/[^a-z0-9а-яё_-]+/gi, "-")
+                  .replace(/^-+|-+$/g, "")
+              )
+              .join("/");
+          }
+
+          function getOutputPath(filePath) {
+            const relative = path.relative(DOCS_DIR, filePath);
+
+            return path.join(
+              SITE_DIR,
+              relative.replace(/\.md$/i, ".html")
+            );
+          }
+
+          function escapeHtml(value) {
+            return value
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/"/g, "&quot;");
+          }
+
+          // -----------------------------------------
+          // FIX: Markdown links .md -> .html
+          // -----------------------------------------
+
           function fixMarkdownLinks(markdown) {
             return markdown.replace(
               /(\]\()((?:\.\/)?[^)\s#]+)\.md(#[^)\s]*)?(\))/gi,
@@ -100,16 +134,10 @@ jobs:
             );
           }
 
-          /*
-           * Дополнительное исправление уже готового HTML.
-           *
-           * Это главная защита от ситуации, когда marked
-           * каким-либо образом оставил .md в href.
-           *
-           * href="01-specification.md"
-           *        ↓
-           * href="01-specification.html"
-           */
+          // -----------------------------------------
+          // FIX: HTML links .md -> .html
+          // -----------------------------------------
+
           function fixHtmlLinks(html) {
             return html.replace(
               /href="([^"]+?)\.md(#[^"]*)?"/gi,
@@ -119,256 +147,408 @@ jobs:
             );
           }
 
-          function escapeHtml(text) {
-            return text
-              .replace(/&/g, "&amp;")
-              .replace(/</g, "&lt;")
-              .replace(/>/g, "&gt;")
-              .replace(/"/g, "&quot;")
-              .replace(/'/g, "&#039;");
+          // -----------------------------------------
+          // Discover documentation
+          // -----------------------------------------
+
+          const markdownFiles = findMarkdownFiles(DOCS_DIR);
+
+          if (markdownFiles.length === 0) {
+            console.error("No Markdown files found in docs/");
+            process.exit(1);
           }
 
-          function relativeUrl(fromFile, targetFile) {
-            const relative = path.relative(
-              path.dirname(fromFile),
-              targetFile
-            );
+          const pages = markdownFiles.map(filePath => {
+            const markdown = fs.readFileSync(filePath, "utf8");
 
-            return relative.split(path.sep).join("/");
-          }
+            return {
+              source: filePath,
+              title: getTitle(markdown, filePath),
+              slug: getSlug(filePath),
+              output: getOutputPath(filePath),
+              relative: path.relative(DOCS_DIR, filePath)
+            };
+          });
 
-          const markdownFiles = getMarkdownFiles(docsDir);
-
-          const pages = markdownFiles
-            .map(file => {
-              const relative = path.relative(docsDir, file);
-
-              const relativeHtml = relative.replace(
-                /\.md$/i,
-                ".html"
-              );
-
-              return {
-                source: file,
-                relative,
-                output: path.join(siteDir, relativeHtml),
-                title: getTitle(
-                  fs.readFileSync(file, "utf8"),
-                  file
-                )
-              };
+          // Natural ordering
+          pages.sort((a, b) =>
+            a.relative.localeCompare(b.relative, undefined, {
+              numeric: true,
+              sensitivity: "base"
             })
-            .sort((a, b) =>
-              a.relative.localeCompare(
-                b.relative,
-                undefined,
-                {
-                  numeric: true,
-                  sensitivity: "base"
-                }
-              )
-            );
+          );
 
           console.log("");
-          console.log("=== Documentation pages ===");
+          console.log("Documentation pages:");
 
           for (const page of pages) {
-            console.log(
-              `${page.relative} -> ${path.relative(
-                siteDir,
-                page.output
-              )}`
-            );
+            console.log(`- ${page.relative} -> ${page.output}`);
           }
 
-          const navigation = pages
-            .filter(page => page.relative !== "index.md")
-            .map(page => {
-              const href = relativeUrl(
-                path.join(siteDir, "index.html"),
-                page.output
-              );
+          console.log("");
 
-              return `
-                <li>
-                  <a href="${href}">
-                    ${escapeHtml(page.title)}
-                  </a>
-                </li>
-              `;
-            })
-            .join("");
+          // -----------------------------------------
+          // Navigation
+          // -----------------------------------------
 
-          const css = `
-            * {
-              box-sizing: border-box;
-            }
+          function createNavigation(currentPage) {
+            return pages
+              .map(page => {
+                const active =
+                  page.source === currentPage.source
+                    ? " class=\"active\""
+                    : "";
 
-            html {
-              color-scheme: dark;
-            }
+                const href =
+                  path.relative(
+                    path.dirname(currentPage.output),
+                    page.output
+                  ).replace(/\\/g, "/");
 
-            body {
-              margin: 0;
-              font-family:
-                -apple-system,
-                BlinkMacSystemFont,
-                "Segoe UI",
-                Helvetica,
-                Arial,
-                sans-serif;
-              background: #0d1117;
-              color: #e6edf3;
-              line-height: 1.6;
-            }
+                return `
+                  <li${active}>
+                    <a href="${href}">${escapeHtml(page.title)}</a>
+                  </li>
+                `;
+              })
+              .join("");
+          }
 
-            a {
-              color: #58a6ff;
-              text-decoration: none;
-            }
+          // -----------------------------------------
+          // HTML page
+          // -----------------------------------------
 
-            a:hover {
-              text-decoration: underline;
-            }
+          function createPage(title, content, currentPage) {
+            const navigation = createNavigation(currentPage);
 
-            .layout {
-              display: flex;
-              min-height: 100vh;
-            }
+            return `<!DOCTYPE html>
+          <html lang="ru">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport"
+                  content="width=device-width, initial-scale=1.0">
 
-            aside {
-              width: 280px;
-              flex-shrink: 0;
-              padding: 24px;
-              border-right: 1px solid #30363d;
-              background: #161b22;
-              position: sticky;
-              top: 0;
-              height: 100vh;
-              overflow-y: auto;
-            }
+            <title>${escapeHtml(title)}</title>
 
-            aside h2 {
-              margin-top: 0;
-              font-size: 20px;
-            }
-
-            aside ul {
-              list-style: none;
-              padding: 0;
-            }
-
-            aside li {
-              margin: 8px 0;
-            }
-
-            main {
-              width: 100%;
-              max-width: 1000px;
-              padding: 48px;
-            }
-
-            main img {
-              max-width: 100%;
-            }
-
-            main pre {
-              overflow-x: auto;
-              padding: 16px;
-              border-radius: 8px;
-              background: #161b22;
-              border: 1px solid #30363d;
-            }
-
-            main code {
-              font-family:
-                ui-monospace,
-                SFMono-Regular,
-                Menlo,
-                Monaco,
-                Consolas,
-                monospace;
-            }
-
-            main :not(pre) > code {
-              padding: 2px 5px;
-              border-radius: 4px;
-              background: #161b22;
-            }
-
-            main blockquote {
-              margin-left: 0;
-              padding-left: 16px;
-              border-left: 4px solid #30363d;
-              color: #8b949e;
-            }
-
-            table {
-              border-collapse: collapse;
-              width: 100%;
-            }
-
-            th,
-            td {
-              padding: 8px 12px;
-              border: 1px solid #30363d;
-            }
-
-            th {
-              background: #161b22;
-            }
-
-            @media (max-width: 800px) {
-              .layout {
-                display: block;
+            <style>
+              * {
+                box-sizing: border-box;
               }
 
-              aside {
-                width: 100%;
-                height: auto;
-                position: static;
-                border-right: 0;
+              body {
+                font-family:
+                  -apple-system,
+                  BlinkMacSystemFont,
+                  "Segoe UI",
+                  "Noto Sans",
+                  Helvetica,
+                  Arial,
+                  sans-serif;
+
+                margin: 0;
+                padding: 0;
+
+                background: #0d1117;
+                color: #c9d1d9;
+
+                line-height: 1.5;
+              }
+
+              .container {
+                max-width: 1280px;
+                margin: 0 auto;
+
+                display: flex;
+
+                min-height: 100vh;
+
+                padding: 24px;
+                gap: 24px;
+              }
+
+              .sidebar {
+                width: 280px;
+
+                background: #161b22;
+
+                padding: 24px;
+
+                border-radius: 6px;
+                border: 1px solid #30363d;
+
+                height: fit-content;
+
+                position: sticky;
+                top: 24px;
+              }
+
+              .sidebar h2 {
+                margin-top: 0;
+                margin-bottom: 16px;
+
+                font-size: 20px;
+                font-weight: 600;
+
+                color: #f0f6fc;
+              }
+
+              .sidebar ul {
+                list-style: none;
+
+                padding: 0;
+                margin: 0;
+              }
+
+              .sidebar li {
+                margin-bottom: 4px;
+              }
+
+              .sidebar a {
+                color: #c9d1d9;
+
+                text-decoration: none;
+
+                padding: 8px 12px;
+
+                display: block;
+
+                border-radius: 6px;
+
+                font-size: 14px;
+
+                transition:
+                  background-color 0.2s,
+                  color 0.2s;
+              }
+
+              .sidebar a:hover {
+                background: #21262d;
+                color: #f0f6fc;
+              }
+
+              .sidebar .active a {
+                background: #1f6feb;
+                color: #ffffff;
+                font-weight: 500;
+              }
+
+              .content {
+                flex: 1;
+
+                background: #0d1117;
+
+                padding: 32px;
+
+                border-radius: 6px;
+                border: 1px solid #30363d;
+
+                min-width: 0;
+              }
+
+              .markdown-body {
+                color: #c9d1d9;
+                font-size: 16px;
+              }
+
+              .markdown-body h1,
+              .markdown-body h2,
+              .markdown-body h3,
+              .markdown-body h4,
+              .markdown-body h5,
+              .markdown-body h6 {
+                color: #f0f6fc;
+
+                font-weight: 600;
+
+                margin-top: 24px;
+                margin-bottom: 16px;
+
+                line-height: 1.25;
+              }
+
+              .markdown-body h1 {
+                font-size: 32px;
+
+                padding-bottom: 8px;
+
                 border-bottom: 1px solid #30363d;
               }
 
-              main {
-                padding: 24px;
-              }
-            }
-          `;
+              .markdown-body h2 {
+                font-size: 24px;
 
-          function makeDocument(title, content) {
-            return `<!doctype html>
-          <html lang="ru">
-          <head>
-            <meta charset="utf-8">
-            <meta
-              name="viewport"
-              content="width=device-width, initial-scale=1"
-            >
-            <title>${escapeHtml(title)} — Z</title>
-            <style>${css}</style>
+                padding-bottom: 8px;
+
+                border-bottom: 1px solid #30363d;
+
+                margin-top: 32px;
+              }
+
+              .markdown-body h3 {
+                font-size: 20px;
+              }
+
+              .markdown-body p {
+                margin-bottom: 16px;
+              }
+
+              .markdown-body a {
+                color: #58a6ff;
+                text-decoration: none;
+              }
+
+              .markdown-body a:hover {
+                text-decoration: underline;
+              }
+
+              .markdown-body code {
+                background: #161b22;
+
+                padding: 2px 6px;
+
+                border-radius: 3px;
+
+                font-size: 85%;
+
+                color: #f85149;
+
+                border: 1px solid #30363d;
+              }
+
+              .markdown-body pre {
+                background: #161b22;
+
+                padding: 16px;
+
+                border-radius: 6px;
+
+                overflow-x: auto;
+
+                border: 1px solid #30363d;
+              }
+
+              .markdown-body pre code {
+                background: transparent;
+
+                padding: 0;
+
+                border: none;
+
+                color: #c9d1d9;
+
+                font-size: 85%;
+              }
+
+              .markdown-body blockquote {
+                padding: 0 16px;
+
+                color: #8b949e;
+
+                border-left: 4px solid #30363d;
+
+                margin: 0;
+              }
+
+              .markdown-body table {
+                border-collapse: collapse;
+
+                width: 100%;
+
+                margin: 16px 0;
+              }
+
+              .markdown-body table th,
+              .markdown-body table td {
+                padding: 8px 16px;
+
+                border: 1px solid #30363d;
+              }
+
+              .markdown-body table th {
+                background: #161b22;
+
+                font-weight: 600;
+
+                color: #f0f6fc;
+              }
+
+              .markdown-body table tr:nth-child(2n) {
+                background: #161b22;
+              }
+
+              .markdown-body ul,
+              .markdown-body ol {
+                padding-left: 24px;
+
+                margin-bottom: 16px;
+              }
+
+              .markdown-body li {
+                margin-bottom: 4px;
+              }
+
+              .markdown-body hr {
+                height: 1px;
+
+                background: #30363d;
+
+                border: none;
+
+                margin: 24px 0;
+              }
+
+              footer {
+                margin-top: 48px;
+
+                padding-top: 24px;
+
+                border-top: 1px solid #30363d;
+
+                color: #8b949e;
+
+                text-align: center;
+
+                font-size: 14px;
+              }
+
+              @media (max-width: 768px) {
+                .container {
+                  flex-direction: column;
+                  padding: 16px;
+                }
+
+                .sidebar {
+                  width: 100%;
+                  position: static;
+                }
+
+                .content {
+                  padding: 24px;
+                }
+              }
+            </style>
           </head>
 
           <body>
-            <div class="layout">
+            <div class="container">
 
-              <aside>
-                <h2>Z</h2>
+              <nav class="sidebar">
+                <h2>Документация</h2>
 
-                <nav>
-                  <ul>
-                    <li>
-                      <a href="index.html">Главная</a>
-                    </li>
+                <ul>
+                  ${navigation}
+                </ul>
+              </nav>
 
-                    ${navigation}
-                  </ul>
-                </nav>
-              </aside>
-
-              <main>
+              <main class="content markdown-body">
                 ${content}
+
+                <footer>
+                  <p>
+                    Generated on
+                    ${new Date().toLocaleDateString("ru-RU")}
+                  </p>
+                </footer>
               </main>
 
             </div>
@@ -376,121 +556,128 @@ jobs:
           </html>`;
           }
 
-          for (const page of pages) {
-            console.log("");
-            console.log(`Building: ${page.relative}`);
+          // -----------------------------------------
+          // Generate pages
+          // -----------------------------------------
 
-            const markdown = fs.readFileSync(
+          for (const page of pages) {
+            let markdown = fs.readFileSync(
               page.source,
               "utf8"
             );
 
-            /*
-             * Шаг 1:
-             * исправляем ссылки в Markdown
-             */
-            const fixedMarkdown =
-              fixMarkdownLinks(markdown);
+            // Markdown .md -> .html
+            markdown = fixMarkdownLinks(markdown);
 
-            /*
-             * Шаг 2:
-             * Markdown -> HTML
-             */
-            let html = marked.parse(
-              fixedMarkdown
-            );
+            // Markdown -> HTML
+            let html = marked.parse(markdown);
 
-            /*
-             * Шаг 3:
-             * гарантированно убираем оставшиеся .md
-             * из href уже готового HTML
-             */
+            // Дополнительная защита после marked
             html = fixHtmlLinks(html);
 
-            /*
-             * Проверка.
-             * Если .md всё ещё остался в ссылках,
-             * сборка падает.
-             */
-            const brokenMdLinks =
-              html.match(/href="[^"]+\.md(?:#[^"]*)?"/gi);
-
-            if (brokenMdLinks) {
-              console.error(
-                "ERROR: Markdown links remain in generated HTML:"
-              );
-
-              console.error(
-                brokenMdLinks
-              );
-
-              process.exit(1);
-            }
-
-            let output = page.output;
-
-            /*
-             * docs/index.md
-             *       ↓
-             * _site/index.html
-             */
-            if (page.relative === "index.md") {
-              output = path.join(
-                siteDir,
-                "index.html"
-              );
-            }
-
-            fs.mkdirSync(
-              path.dirname(output),
-              {
-                recursive: true
-              }
-            );
+            fs.mkdirSync(path.dirname(page.output), {
+              recursive: true
+            });
 
             fs.writeFileSync(
-              output,
-              makeDocument(
+              page.output,
+              createPage(
                 page.title,
-                html
-              ),
-              "utf8"
-            );
-
-            console.log(
-              `Generated: ${path.relative(
-                siteDir,
-                output
-              )}`
+                html,
+                page
+              )
             );
           }
 
-          /*
-           * GitHub Pages
-           */
+          // -----------------------------------------
+          // Index
+          // -----------------------------------------
+
+          const indexPage = pages.find(page =>
+            path.basename(page.source).toLowerCase() === "index.md"
+          );
+
+          if (indexPage) {
+            const indexOutput =
+              path.join(SITE_DIR, "index.html");
+
+            let markdown = fs.readFileSync(
+              indexPage.source,
+              "utf8"
+            );
+
+            // FIX: index.md тоже должен получать .html
+            markdown = fixMarkdownLinks(markdown);
+
+            let html = marked.parse(markdown);
+
+            // FIX: окончательная проверка href
+            html = fixHtmlLinks(html);
+
+            fs.writeFileSync(
+              indexOutput,
+              createPage(
+                indexPage.title,
+                html,
+                indexPage
+              )
+            );
+          } else {
+            const links = pages
+              .map(page => {
+                const href = path
+                  .relative(SITE_DIR, page.output)
+                  .replace(/\\/g, "/");
+
+                return `- [${page.title}](${href})`;
+              })
+              .join("\n");
+
+            const content = marked.parse(links);
+
+            const homePage = {
+              source: "__index__",
+              output: path.join(
+                SITE_DIR,
+                "index.html"
+              )
+            };
+
+            fs.writeFileSync(
+              path.join(
+                SITE_DIR,
+                "index.html"
+              ),
+              createPage(
+                "Документация",
+                content,
+                homePage
+              )
+            );
+          }
+
+          // -----------------------------------------
+          // GitHub Pages
+          // -----------------------------------------
+
           fs.writeFileSync(
-            path.join(siteDir, ".nojekyll"),
-            "",
-            "utf8"
+            path.join(SITE_DIR, ".nojekyll"),
+            ""
           );
 
-          /*
-           * Показываем итоговые HTML-файлы
-           */
+          // -----------------------------------------
+          // Final validation
+          // -----------------------------------------
+
           console.log("");
-          console.log(
-            "=== Generated files ==="
-          );
+          console.log("=== Checking generated links ===");
 
-          function getAllFiles(dir) {
+          function findHtmlFiles(dir) {
             const result = [];
 
-            for (const entry of fs.readdirSync(
-              dir,
-              {
-                withFileTypes: true
-              }
-            )) {
+            for (const entry of fs.readdirSync(dir, {
+              withFileTypes: true
+            })) {
               const fullPath = path.join(
                 dir,
                 entry.name
@@ -498,9 +685,12 @@ jobs:
 
               if (entry.isDirectory()) {
                 result.push(
-                  ...getAllFiles(fullPath)
+                  ...findHtmlFiles(fullPath)
                 );
-              } else {
+              } else if (
+                entry.isFile() &&
+                entry.name.toLowerCase().endsWith(".html")
+              ) {
                 result.push(fullPath);
               }
             }
@@ -508,63 +698,51 @@ jobs:
             return result;
           }
 
-          for (const file of getAllFiles(
-            siteDir
-          )) {
-            console.log(
-              path.relative(
-                siteDir,
-                file
-              )
+          const htmlFiles = findHtmlFiles(SITE_DIR);
+
+          for (const file of htmlFiles) {
+            const html = fs.readFileSync(
+              file,
+              "utf8"
             );
-          }
 
-          /*
-           * Финальная проверка всего сайта.
-           *
-           * Если где-нибудь осталась ссылка
-           * на .md — GitHub Actions завершится
-           * с ошибкой вместо публикации сломанной версии.
-           */
-          for (const file of getAllFiles(
-            siteDir
-          )) {
-            if (!file.endsWith(".html")) {
-              continue;
-            }
+            const badLinks = html.match(
+              /href="[^"]+\.md(?:#[^"]*)?"/gi
+            );
 
-            const content =
-              fs.readFileSync(
-                file,
-                "utf8"
-              );
-
-            if (
-              /href="[^"]+\.md(?:#[^"]*)?"/i.test(
-                content
-              )
-            ) {
+            if (badLinks) {
               console.error(
-                `ERROR: Found .md link in ${file}`
+                `ERROR: .md links found in ${file}:`
               );
+
+              console.error(badLinks);
 
               process.exit(1);
             }
           }
 
-          console.log("");
-          console.log(
-            "Documentation build completed successfully."
-          );
-          NODE
+          console.log("All documentation links are valid.");
 
-      - name: Configure GitHub Pages
+          console.log("");
+          console.log("=== Generated files ===");
+
+          for (const file of htmlFiles) {
+            console.log(
+              path.relative(SITE_DIR, file)
+            );
+          }
+          EOF
+
+          node compiler.js
+
+      - name: Setup Pages
         uses: actions/configure-pages@v5
 
-      - name: Upload Pages artifact
+      - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./_site
+          path: "_site/"
 
       - name: Deploy to GitHub Pages
+        id: deployment
         uses: actions/deploy-pages@v4
