@@ -78,7 +78,7 @@ jobs:
           }
 
           // -----------------------------------------
-          // Helpers
+          // Get page title
           // -----------------------------------------
 
           function getTitle(markdown, filePath) {
@@ -88,17 +88,31 @@ jobs:
               return match[1].trim();
             }
 
-            return path.basename(filePath, path.extname(filePath));
+            return path.basename(
+              filePath,
+              path.extname(filePath)
+            );
           }
 
+          // -----------------------------------------
+          // Get HTML output path
+          // -----------------------------------------
+
           function getOutputPath(filePath) {
-            const relative = path.relative(DOCS_DIR, filePath);
+            const relative = path.relative(
+              DOCS_DIR,
+              filePath
+            );
 
             return path.join(
               SITE_DIR,
               relative.replace(/\.md$/i, ".html")
             );
           }
+
+          // -----------------------------------------
+          // Escape HTML
+          // -----------------------------------------
 
           function escapeHtml(value) {
             return value
@@ -109,14 +123,22 @@ jobs:
           }
 
           // -----------------------------------------
-          // Convert Markdown links to HTML links
+          // Convert local Markdown links
+          //
+          // [Text](01-specification.md)
+          // ->
+          // [Text](01-specification.html)
+          //
+          // [Text](01-specification.md#syntax)
+          // ->
+          // [Text](01-specification.html#syntax)
           // -----------------------------------------
 
-          function fixMarkdownLinks(html) {
-            return html.replace(
-              /href="([^"]+?)(\.md)(#[^"]*)?"/gi,
-              (match, file, extension, hash = "") => {
-                return `href="${file}.html${hash}"`;
+          function fixMarkdownLinks(markdown) {
+            return markdown.replace(
+              /(\]\()((?:\.\/)?[^)\s#]+)\.md(#[^)\s]*)?(\))/gi,
+              (match, prefix, file, hash = "", suffix) => {
+                return `${prefix}${file}.html${hash}${suffix}`;
               }
             );
           }
@@ -125,41 +147,59 @@ jobs:
           // Discover documentation
           // -----------------------------------------
 
-          const markdownFiles = findMarkdownFiles(DOCS_DIR);
+          const markdownFiles =
+            findMarkdownFiles(DOCS_DIR);
 
           if (markdownFiles.length === 0) {
-            console.error("No Markdown files found in docs/");
+            console.error(
+              "No Markdown files found in docs/"
+            );
+
             process.exit(1);
           }
 
           const pages = markdownFiles.map(filePath => {
-            const markdown = fs.readFileSync(filePath, "utf8");
+            const markdown =
+              fs.readFileSync(filePath, "utf8");
 
             return {
               source: filePath,
-              title: getTitle(markdown, filePath),
+              title: getTitle(
+                markdown,
+                filePath
+              ),
               output: getOutputPath(filePath),
-              relative: path.relative(DOCS_DIR, filePath)
+              relative: path.relative(
+                DOCS_DIR,
+                filePath
+              )
             };
           });
 
-          // Natural ordering:
-          // 01-intro.md
-          // 02-install.md
-          // 03-api.md
+          // -----------------------------------------
+          // Natural sorting
+          // -----------------------------------------
 
           pages.sort((a, b) =>
-            a.relative.localeCompare(b.relative, undefined, {
-              numeric: true,
-              sensitivity: "base"
-            })
+            a.relative.localeCompare(
+              b.relative,
+              undefined,
+              {
+                numeric: true,
+                sensitivity: "base"
+              }
+            )
           );
 
           console.log("");
-          console.log("Documentation pages:");
+          console.log(
+            "Documentation pages:"
+          );
 
           for (const page of pages) {
-            console.log(`- ${page.relative} -> ${page.output}`);
+            console.log(
+              `- ${page.relative} -> ${page.output}`
+            );
           }
 
           console.log("");
@@ -172,25 +212,30 @@ jobs:
             return pages
               .map(page => {
                 const active =
-                  page.source === currentPage.source
+                  page.source ===
+                  currentPage.source
                     ? ' class="active"'
                     : "";
 
                 let href = path
                   .relative(
-                    path.dirname(currentPage.output),
+                    path.dirname(
+                      currentPage.output
+                    ),
                     page.output
                   )
                   .replace(/\\/g, "/");
 
-                // index.html should be linked as /
+                // index.html -> /
                 if (href === "index.html") {
                   href = "/";
                 }
 
                 return `
                   <li${active}>
-                    <a href="${href}">${escapeHtml(page.title)}</a>
+                    <a href="${href}">
+                      ${escapeHtml(page.title)}
+                    </a>
                   </li>
                 `;
               })
@@ -198,14 +243,20 @@ jobs:
           }
 
           // -----------------------------------------
-          // HTML page
+          // Create HTML page
           // -----------------------------------------
 
-          function createPage(title, content, currentPage) {
-            const navigation = createNavigation(currentPage);
+          function createPage(
+            title,
+            content,
+            currentPage
+          ) {
+            const navigation =
+              createNavigation(currentPage);
 
             return `<!DOCTYPE html>
           <html lang="ru">
+
           <head>
             <meta charset="UTF-8">
 
@@ -214,7 +265,9 @@ jobs:
               content="width=device-width, initial-scale=1.0"
             >
 
-            <title>${escapeHtml(title)}</title>
+            <title>
+              ${escapeHtml(title)}
+            </title>
 
             <style>
               * {
@@ -532,41 +585,55 @@ jobs:
                 <footer>
                   <p>
                     Generated on
-                    ${new Date().toLocaleDateString("ru-RU")}
+                    ${new Date()
+                      .toLocaleDateString("ru-RU")}
                   </p>
                 </footer>
               </main>
 
             </div>
           </body>
+
           </html>`;
           }
 
           // -----------------------------------------
-          // Generate pages
+          // Generate all pages
           // -----------------------------------------
 
           for (const page of pages) {
-            // docs/index.md becomes the root index.html
             const isIndex =
-              path.basename(page.source).toLowerCase() === "index.md";
+              path.basename(
+                page.source
+              ).toLowerCase() === "index.md";
 
             const output = isIndex
-              ? path.join(SITE_DIR, "index.html")
+              ? path.join(
+                  SITE_DIR,
+                  "index.html"
+                )
               : page.output;
 
-            const markdown = fs.readFileSync(
-              page.source,
-              "utf8"
+            const markdown =
+              fs.readFileSync(
+                page.source,
+                "utf8"
+              );
+
+            // IMPORTANT:
+            // Fix .md links BEFORE Markdown -> HTML
+            const fixedMarkdown =
+              fixMarkdownLinks(markdown);
+
+            const html =
+              marked.parse(fixedMarkdown);
+
+            fs.mkdirSync(
+              path.dirname(output),
+              {
+                recursive: true
+              }
             );
-
-            let html = marked.parse(markdown);
-
-            html = fixMarkdownLinks(html);
-
-            fs.mkdirSync(path.dirname(output), {
-              recursive: true
-            });
 
             fs.writeFileSync(
               output,
@@ -586,7 +653,10 @@ jobs:
           // -----------------------------------------
 
           fs.writeFileSync(
-            path.join(SITE_DIR, ".nojekyll"),
+            path.join(
+              SITE_DIR,
+              ".nojekyll"
+            ),
             ""
           );
 
@@ -595,13 +665,22 @@ jobs:
           // -----------------------------------------
 
           console.log("");
-          console.log("=== Generated files ===");
+          console.log(
+            "=== Generated files ==="
+          );
 
           function listFiles(dir) {
-            for (const entry of fs.readdirSync(dir, {
-              withFileTypes: true
-            })) {
-              const full = path.join(dir, entry.name);
+            for (const entry of fs.readdirSync(
+              dir,
+              {
+                withFileTypes: true
+              }
+            )) {
+              const full =
+                path.join(
+                  dir,
+                  entry.name
+                );
 
               if (entry.isDirectory()) {
                 listFiles(full);
