@@ -122,7 +122,7 @@ jobs:
           }
 
           // -----------------------------------------
-          // FIX: Markdown links .md -> .html
+          // Markdown links: .md -> .html
           // -----------------------------------------
 
           function fixMarkdownLinks(markdown) {
@@ -135,7 +135,7 @@ jobs:
           }
 
           // -----------------------------------------
-          // FIX: HTML links .md -> .html
+          // HTML links: .md -> .html
           // -----------------------------------------
 
           function fixHtmlLinks(html) {
@@ -170,19 +170,45 @@ jobs:
             };
           });
 
-          // Natural ordering
-          pages.sort((a, b) =>
-            a.relative.localeCompare(b.relative, undefined, {
-              numeric: true,
-              sensitivity: "base"
-            })
-          );
+          // -----------------------------------------
+          // Sort pages
+          //
+          // Home всегда первый.
+          // Остальные страницы — естественная сортировка.
+          // -----------------------------------------
+
+          pages.sort((a, b) => {
+            const aIsIndex =
+              path.basename(a.source).toLowerCase() === "index.md";
+
+            const bIsIndex =
+              path.basename(b.source).toLowerCase() === "index.md";
+
+            if (aIsIndex && !bIsIndex) {
+              return -1;
+            }
+
+            if (!aIsIndex && bIsIndex) {
+              return 1;
+            }
+
+            return a.relative.localeCompare(
+              b.relative,
+              undefined,
+              {
+                numeric: true,
+                sensitivity: "base"
+              }
+            );
+          });
 
           console.log("");
           console.log("Documentation pages:");
 
           for (const page of pages) {
-            console.log(`- ${page.relative} -> ${page.output}`);
+            console.log(
+              `- ${page.relative} -> ${page.output}`
+            );
           }
 
           console.log("");
@@ -194,20 +220,46 @@ jobs:
           function createNavigation(currentPage) {
             return pages
               .map(page => {
+                const isIndex =
+                  path.basename(page.source).toLowerCase() ===
+                  "index.md";
+
                 const active =
                   page.source === currentPage.source
                     ? " class=\"active\""
                     : "";
 
-                const href =
-                  path.relative(
-                    path.dirname(currentPage.output),
-                    page.output
-                  ).replace(/\\/g, "/");
+                let href;
+
+                if (isIndex) {
+                  href = path
+                    .relative(
+                      path.dirname(currentPage.output),
+                      path.join(SITE_DIR, "index.html")
+                    )
+                    .replace(/\\/g, "/");
+
+                  if (!href) {
+                    href = "index.html";
+                  }
+                } else {
+                  href = path
+                    .relative(
+                      path.dirname(currentPage.output),
+                      page.output
+                    )
+                    .replace(/\\/g, "/");
+                }
+
+                const title = isIndex
+                  ? "Home"
+                  : page.title;
 
                 return `
                   <li${active}>
-                    <a href="${href}">${escapeHtml(page.title)}</a>
+                    <a href="${href}">
+                      ${escapeHtml(title)}
+                    </a>
                   </li>
                 `;
               })
@@ -219,14 +271,17 @@ jobs:
           // -----------------------------------------
 
           function createPage(title, content, currentPage) {
-            const navigation = createNavigation(currentPage);
+            const navigation =
+              createNavigation(currentPage);
 
             return `<!DOCTYPE html>
           <html lang="ru">
           <head>
             <meta charset="UTF-8">
-            <meta name="viewport"
-                  content="width=device-width, initial-scale=1.0">
+            <meta
+              name="viewport"
+              content="width=device-width, initial-scale=1.0"
+            >
 
             <title>${escapeHtml(title)}</title>
 
@@ -533,7 +588,7 @@ jobs:
             <div class="container">
 
               <nav class="sidebar">
-                <h2>Документация</h2>
+                <h2>Documentation</h2>
 
                 <ul>
                   ${navigation}
@@ -566,18 +621,18 @@ jobs:
               "utf8"
             );
 
-            // Markdown .md -> .html
             markdown = fixMarkdownLinks(markdown);
 
-            // Markdown -> HTML
             let html = marked.parse(markdown);
 
-            // Дополнительная защита после marked
             html = fixHtmlLinks(html);
 
-            fs.mkdirSync(path.dirname(page.output), {
-              recursive: true
-            });
+            fs.mkdirSync(
+              path.dirname(page.output),
+              {
+                recursive: true
+              }
+            );
 
             fs.writeFileSync(
               page.output,
@@ -594,7 +649,8 @@ jobs:
           // -----------------------------------------
 
           const indexPage = pages.find(page =>
-            path.basename(page.source).toLowerCase() === "index.md"
+            path.basename(page.source).toLowerCase() ===
+            "index.md"
           );
 
           if (indexPage) {
@@ -606,12 +662,10 @@ jobs:
               "utf8"
             );
 
-            // FIX: index.md тоже должен получать .html
             markdown = fixMarkdownLinks(markdown);
 
             let html = marked.parse(markdown);
 
-            // FIX: окончательная проверка href
             html = fixHtmlLinks(html);
 
             fs.writeFileSync(
@@ -626,7 +680,10 @@ jobs:
             const links = pages
               .map(page => {
                 const href = path
-                  .relative(SITE_DIR, page.output)
+                  .relative(
+                    SITE_DIR,
+                    page.output
+                  )
                   .replace(/\\/g, "/");
 
                 return `- [${page.title}](${href})`;
@@ -649,7 +706,7 @@ jobs:
                 "index.html"
               ),
               createPage(
-                "Документация",
+                "Documentation",
                 content,
                 homePage
               )
@@ -670,7 +727,9 @@ jobs:
           // -----------------------------------------
 
           console.log("");
-          console.log("=== Checking generated links ===");
+          console.log(
+            "=== Checking generated links ==="
+          );
 
           function findHtmlFiles(dir) {
             const result = [];
@@ -698,13 +757,15 @@ jobs:
             return result;
           }
 
-          const htmlFiles = findHtmlFiles(SITE_DIR);
+          const htmlFiles =
+            findHtmlFiles(SITE_DIR);
 
           for (const file of htmlFiles) {
-            const html = fs.readFileSync(
-              file,
-              "utf8"
-            );
+            const html =
+              fs.readFileSync(
+                file,
+                "utf8"
+              );
 
             const badLinks = html.match(
               /href="[^"]+\.md(?:#[^"]*)?"/gi
@@ -721,14 +782,21 @@ jobs:
             }
           }
 
-          console.log("All documentation links are valid.");
+          console.log(
+            "All documentation links are valid."
+          );
 
           console.log("");
-          console.log("=== Generated files ===");
+          console.log(
+            "=== Generated files ==="
+          );
 
           for (const file of htmlFiles) {
             console.log(
-              path.relative(SITE_DIR, file)
+              path.relative(
+                SITE_DIR,
+                file
+              )
             );
           }
           EOF
