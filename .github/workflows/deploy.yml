@@ -78,23 +78,43 @@ jobs:
             return path.basename(filePath, ".md");
           }
 
-          // Преобразует локальные Markdown-ссылки:
-          //
-          // [Текст](01-specification.md)
-          //              ↓
-          // [Текст](01-specification.html)
-          //
-          // Также сохраняет якоря:
-          //
-          // [Текст](01-specification.md#types)
-          //              ↓
-          // [Текст](01-specification.html#types)
-          //
+          /*
+           * Исправление Markdown-ссылок:
+           *
+           * [Спецификация](01-specification.md)
+           *                    ↓
+           * [Спецификация](01-specification.html)
+           *
+           * Также:
+           *
+           * [Типы](01-specification.md#types)
+           *       ↓
+           * [Типы](01-specification.html#types)
+           */
           function fixMarkdownLinks(markdown) {
             return markdown.replace(
               /(\]\()((?:\.\/)?[^)\s#]+)\.md(#[^)\s]*)?(\))/gi,
               (match, prefix, file, hash = "", suffix) => {
                 return `${prefix}${file}.html${hash}${suffix}`;
+              }
+            );
+          }
+
+          /*
+           * Дополнительное исправление уже готового HTML.
+           *
+           * Это главная защита от ситуации, когда marked
+           * каким-либо образом оставил .md в href.
+           *
+           * href="01-specification.md"
+           *        ↓
+           * href="01-specification.html"
+           */
+          function fixHtmlLinks(html) {
+            return html.replace(
+              /href="([^"]+?)\.md(#[^"]*)?"/gi,
+              (match, file, hash = "") => {
+                return `href="${file}.html${hash}"`;
               }
             );
           }
@@ -149,11 +169,12 @@ jobs:
               )
             );
 
-          console.log("Documentation pages:");
+          console.log("");
+          console.log("=== Documentation pages ===");
 
           for (const page of pages) {
             console.log(
-              `- ${page.relative} -> ${path.relative(
+              `${page.relative} -> ${path.relative(
                 siteDir,
                 page.output
               )}`
@@ -328,8 +349,10 @@ jobs:
             <title>${escapeHtml(title)} — Z</title>
             <style>${css}</style>
           </head>
+
           <body>
             <div class="layout">
+
               <aside>
                 <h2>Z</h2>
 
@@ -347,27 +370,70 @@ jobs:
               <main>
                 ${content}
               </main>
+
             </div>
           </body>
           </html>`;
           }
 
           for (const page of pages) {
+            console.log("");
+            console.log(`Building: ${page.relative}`);
+
             const markdown = fs.readFileSync(
               page.source,
               "utf8"
             );
 
-            // СНАЧАЛА меняем .md → .html
+            /*
+             * Шаг 1:
+             * исправляем ссылки в Markdown
+             */
             const fixedMarkdown =
               fixMarkdownLinks(markdown);
 
-            // ПОТОМ превращаем Markdown в HTML
-            const html = marked.parse(fixedMarkdown);
+            /*
+             * Шаг 2:
+             * Markdown -> HTML
+             */
+            let html = marked.parse(
+              fixedMarkdown
+            );
+
+            /*
+             * Шаг 3:
+             * гарантированно убираем оставшиеся .md
+             * из href уже готового HTML
+             */
+            html = fixHtmlLinks(html);
+
+            /*
+             * Проверка.
+             * Если .md всё ещё остался в ссылках,
+             * сборка падает.
+             */
+            const brokenMdLinks =
+              html.match(/href="[^"]+\.md(?:#[^"]*)?"/gi);
+
+            if (brokenMdLinks) {
+              console.error(
+                "ERROR: Markdown links remain in generated HTML:"
+              );
+
+              console.error(
+                brokenMdLinks
+              );
+
+              process.exit(1);
+            }
 
             let output = page.output;
 
-            // docs/index.md → _site/index.html
+            /*
+             * docs/index.md
+             *       ↓
+             * _site/index.html
+             */
             if (page.relative === "index.md") {
               output = path.join(
                 siteDir,
@@ -384,31 +450,56 @@ jobs:
 
             fs.writeFileSync(
               output,
-              makeDocument(page.title, html),
+              makeDocument(
+                page.title,
+                html
+              ),
               "utf8"
+            );
+
+            console.log(
+              `Generated: ${path.relative(
+                siteDir,
+                output
+              )}`
             );
           }
 
-          // GitHub Pages
+          /*
+           * GitHub Pages
+           */
           fs.writeFileSync(
             path.join(siteDir, ".nojekyll"),
             "",
             "utf8"
           );
 
+          /*
+           * Показываем итоговые HTML-файлы
+           */
           console.log("");
-          console.log("=== Generated files ===");
+          console.log(
+            "=== Generated files ==="
+          );
 
           function getAllFiles(dir) {
             const result = [];
 
-            for (const entry of fs.readdirSync(dir, {
-              withFileTypes: true
-            })) {
-              const fullPath = path.join(dir, entry.name);
+            for (const entry of fs.readdirSync(
+              dir,
+              {
+                withFileTypes: true
+              }
+            )) {
+              const fullPath = path.join(
+                dir,
+                entry.name
+              );
 
               if (entry.isDirectory()) {
-                result.push(...getAllFiles(fullPath));
+                result.push(
+                  ...getAllFiles(fullPath)
+                );
               } else {
                 result.push(fullPath);
               }
@@ -417,11 +508,54 @@ jobs:
             return result;
           }
 
-          for (const file of getAllFiles(siteDir)) {
+          for (const file of getAllFiles(
+            siteDir
+          )) {
             console.log(
-              path.relative(siteDir, file)
+              path.relative(
+                siteDir,
+                file
+              )
             );
           }
+
+          /*
+           * Финальная проверка всего сайта.
+           *
+           * Если где-нибудь осталась ссылка
+           * на .md — GitHub Actions завершится
+           * с ошибкой вместо публикации сломанной версии.
+           */
+          for (const file of getAllFiles(
+            siteDir
+          )) {
+            if (!file.endsWith(".html")) {
+              continue;
+            }
+
+            const content =
+              fs.readFileSync(
+                file,
+                "utf8"
+              );
+
+            if (
+              /href="[^"]+\.md(?:#[^"]*)?"/i.test(
+                content
+              )
+            ) {
+              console.error(
+                `ERROR: Found .md link in ${file}`
+              );
+
+              process.exit(1);
+            }
+          }
+
+          console.log("");
+          console.log(
+            "Documentation build completed successfully."
+          );
           NODE
 
       - name: Configure GitHub Pages
