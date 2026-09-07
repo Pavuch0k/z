@@ -1,3 +1,4 @@
+```yaml
 name: Deploy Docs to GitHub Pages
 
 on:
@@ -25,10 +26,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
 
       - name: Build documentation
         run: |
+          rm -rf _site
           mkdir -p _site
 
           npm install marked
@@ -47,7 +49,7 @@ jobs:
           });
 
           // -----------------------------------------
-          // Find all Markdown files
+          // Find all Markdown files recursively
           // -----------------------------------------
 
           function findMarkdownFiles(dir) {
@@ -86,22 +88,7 @@ jobs:
               return match[1].trim();
             }
 
-            return path.basename(filePath, ".md");
-          }
-
-          function getSlug(filePath) {
-            const relative = path.relative(DOCS_DIR, filePath);
-
-            return relative
-              .replace(/\.md$/i, "")
-              .split(path.sep)
-              .map(part =>
-                part
-                  .toLowerCase()
-                  .replace(/[^a-z0-9а-яё_-]+/gi, "-")
-                  .replace(/^-+|-+$/g, "")
-              )
-              .join("/");
+            return path.basename(filePath, path.extname(filePath));
           }
 
           function getOutputPath(filePath) {
@@ -122,6 +109,19 @@ jobs:
           }
 
           // -----------------------------------------
+          // Convert Markdown links to HTML links
+          // -----------------------------------------
+
+          function fixMarkdownLinks(html) {
+            return html.replace(
+              /href="([^"]+?)(\.md)(#[^"]*)?"/gi,
+              (match, file, extension, hash = "") => {
+                return `href="${file}.html${hash}"`;
+              }
+            );
+          }
+
+          // -----------------------------------------
           // Discover documentation
           // -----------------------------------------
 
@@ -138,7 +138,6 @@ jobs:
             return {
               source: filePath,
               title: getTitle(markdown, filePath),
-              slug: getSlug(filePath),
               output: getOutputPath(filePath),
               relative: path.relative(DOCS_DIR, filePath)
             };
@@ -148,6 +147,7 @@ jobs:
           // 01-intro.md
           // 02-install.md
           // 03-api.md
+
           pages.sort((a, b) =>
             a.relative.localeCompare(b.relative, undefined, {
               numeric: true,
@@ -173,14 +173,20 @@ jobs:
               .map(page => {
                 const active =
                   page.source === currentPage.source
-                    ? " class=\"active\""
+                    ? ' class="active"'
                     : "";
 
-                const href =
-                  path.relative(
+                let href = path
+                  .relative(
                     path.dirname(currentPage.output),
                     page.output
-                  ).replace(/\\/g, "/");
+                  )
+                  .replace(/\\/g, "/");
+
+                // index.html should be linked as /
+                if (href === "index.html") {
+                  href = "/";
+                }
 
                 return `
                   <li${active}>
@@ -202,8 +208,11 @@ jobs:
           <html lang="ru">
           <head>
             <meta charset="UTF-8">
-            <meta name="viewport"
-                  content="width=device-width, initial-scale=1.0">
+
+            <meta
+              name="viewport"
+              content="width=device-width, initial-scale=1.0"
+            >
 
             <title>${escapeHtml(title)}</title>
 
@@ -538,100 +547,76 @@ jobs:
           // -----------------------------------------
 
           for (const page of pages) {
-            const markdown = fs.readFileSync(page.source, "utf8");
+            // docs/index.md becomes the root index.html
+            const isIndex =
+              path.basename(page.source).toLowerCase() === "index.md";
 
-            const html = marked.parse(markdown);
+            const output = isIndex
+              ? path.join(SITE_DIR, "index.html")
+              : page.output;
 
-            fs.mkdirSync(path.dirname(page.output), {
+            const markdown = fs.readFileSync(
+              page.source,
+              "utf8"
+            );
+
+            let html = marked.parse(markdown);
+
+            html = fixMarkdownLinks(html);
+
+            fs.mkdirSync(path.dirname(output), {
               recursive: true
             });
 
             fs.writeFileSync(
-              page.output,
-              createPage(page.title, html, page)
-            );
-          }
-
-          // -----------------------------------------
-          // Find index page
-          // -----------------------------------------
-
-          const indexPage = pages.find(page =>
-            path.basename(page.source).toLowerCase() === "index.md"
-          );
-
-          if (indexPage) {
-            const indexOutput = path.join(SITE_DIR, "index.html");
-
-            const markdown = fs.readFileSync(
-              indexPage.source,
-              "utf8"
-            );
-
-            fs.writeFileSync(
-              indexOutput,
+              output,
               createPage(
-                indexPage.title,
-                marked.parse(markdown),
-                indexPage
-              )
-            );
-          } else {
-            const firstPage = pages[0];
-
-            const links = pages
-              .map(page => {
-                const href = path
-                  .relative(SITE_DIR, page.output)
-                  .replace(/\\/g, "/");
-
-                return `- [${page.title}](${href})`;
-              })
-              .join("\n");
-
-            const content = marked.parse(
-              `# Документация\n\n${links}`
-            );
-
-            const homePage = {
-              source: "__index__",
-              output: path.join(SITE_DIR, "index.html")
-            };
-
-            fs.writeFileSync(
-              path.join(SITE_DIR, "index.html"),
-              createPage(
-                "Документация",
-                content,
-                homePage
+                page.title,
+                html,
+                {
+                  ...page,
+                  output
+                }
               )
             );
           }
 
+          // -----------------------------------------
           // GitHub Pages
+          // -----------------------------------------
+
           fs.writeFileSync(
             path.join(SITE_DIR, ".nojekyll"),
             ""
           );
 
+          // -----------------------------------------
+          // Show generated files
+          // -----------------------------------------
+
           console.log("");
           console.log("=== Generated files ===");
 
-          function listHtml(dir) {
+          function listFiles(dir) {
             for (const entry of fs.readdirSync(dir, {
               withFileTypes: true
             })) {
               const full = path.join(dir, entry.name);
 
               if (entry.isDirectory()) {
-                listHtml(full);
-              } else if (entry.name.endsWith(".html")) {
+                listFiles(full);
+              } else {
                 console.log(full);
               }
             }
           }
 
-          listHtml(SITE_DIR);
+          listFiles(SITE_DIR);
+
+          console.log("");
+          console.log(
+            `Generated ${pages.length} Markdown page(s).`
+          );
           EOF
 
           node compiler.js
@@ -647,3 +632,4 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+```
