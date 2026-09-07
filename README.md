@@ -1,1 +1,1 @@
-[Docs.md](Docs.md)
+[Документация](https://pavuch0k.github.io/z/)
