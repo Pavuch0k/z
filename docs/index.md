@@ -10,3 +10,4 @@
 - [Лексический анализ](04-lexical.md)
 - [Типы](05-types.md)
 - [Объявления](06-declarations.md)
+- [Выражения](07-expressions.md)
