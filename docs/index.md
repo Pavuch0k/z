@@ -7,3 +7,6 @@
 - [Назначение](01-purpose.md)
 - [Философия](02-philosophy.md)
 - [Архитектура](03-architecture.md)
+- [Лексический анализ](04-lexical.md)
+- [Типы](05-types.md)
+- [Объявления](06-declarations.md)
