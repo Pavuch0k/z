@@ -1,0 +1,49 @@
+fun add(a: num, b: num): num {
+    return a + b
+}
+
+fun abs(x: num): num {
+    if x < 0 {
+        return -x
+    } else {
+        return x
+    }
+}
+
+fun entry() {
+    a: num = 10
+    b := 3
+    out(add(a, b))
+    out(a - b)
+    out(a * b)
+    out(a / b)
+    out(a % b)
+
+    title := "Z"
+    out(title + " language")
+
+    nums: []num = [1, 2, 3]
+    out(nums[0])
+    nums[1] = 20
+    out(nums[1])
+
+    if a > b {
+        out("greater")
+    } else {
+        out("not greater")
+    }
+
+    i := 0
+    loop i < 3 {
+        out(i)
+        i = i + 1
+    }
+
+    for k from 1 to 3 {
+        out(k)
+    }
+
+    out(abs(-5))
+    ok := yes && a != b
+    out(ok)
+}

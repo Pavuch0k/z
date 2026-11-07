@@ -1,0 +1,47 @@
+fun avg(sum: num, n: num): num {
+    return sum / n
+}
+
+fun grade(score: num): text {
+    if score >= 90 {
+        return "A"
+    } else {
+        if score >= 75 {
+            return "B"
+        } else {
+            if score >= 60 {
+                return "C"
+            } else {
+                return "F"
+            }
+        }
+    }
+}
+
+fun entry() {
+    scores: []num = [91, 78, 64, 55, 88]
+    total := 0
+    count := 0
+
+    out("Scores:")
+    for i from 0 to 4 {
+        out(scores[i])
+        total = total + scores[i]
+        count = count + 1
+    }
+
+    mean := avg(total, count)
+    out("Average:")
+    out(mean)
+    out("Grade:")
+    out(grade(mean))
+
+    out("Pass list:")
+    i := 0
+    loop i < 5 {
+        if scores[i] >= 60 {
+            out(scores[i])
+        }
+        i = i + 1
+    }
+}

@@ -1,0 +1,10 @@
+dist/
+_site/
+node_modules/
+*.test
+/a.out
+/hello
+/all
+/grades
+*.exe
+!bin/*.exe

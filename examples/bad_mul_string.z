@@ -1,0 +1,4 @@
+fun entry() {
+    s := "abc"
+    out(s * 2)
+}
